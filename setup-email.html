@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>2FA Demo with Email Verification</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body { 
+            background-color: #f8f9fa;
+            padding-top: 2rem;
+        }
+        .step-container {
+            position: relative;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.05);
+        }
+        .step-number {
+            position: absolute;
+            top: -15px;
+            left: -15px;
+            width: 40px;
+            height: 40px;
+            background: #0d6efd;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+        }
+        .qr-container {
+            background: #f8f9fa;
+            padding: 2rem;
+            border-radius: 10px;
+            text-align: center;
+            margin: 1rem 0;
+        }
+        .secret-key {
+            font-family: monospace;
+            padding: 1rem;
+            background-color: #f8f9fa;
+            border: 1px dashed #dee2e6;
+            border-radius: 5px;
+            margin: 1rem 0;
+            word-break: break-all;
+        }
+        .status-badge {
+            display: none;
+            padding: 0.5rem 1rem;
+            margin-top: 1rem;
+            border-radius: 5px;
+            font-weight: 500;
+        }
+        .auth-step {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+        .auth-step.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" style="max-width: 800px;">
+        <div class="text-center mb-5">
+            <h1 class="display-4">Two-Factor Authentication Setup</h1>
+            <p class="lead text-muted">Secure your account with Google Authenticator</p>
+        </div>
+
+        <!-- Step 1: Email Verification -->
+        <div class="step-container" id="emailStep">
+            <div class="step-number">1</div>
+            <h2 class="mb-4">Verify Email</h2>
+            <div class="mb-3">
+                <label class="form-label">Email Address</label>
+                <input type="email" id="userEmail" class="form-control" placeholder="Enter your email">
+            </div>
+            <button onclick="auth.verifyEmail()" class="btn btn-primary">
+                <i class="bi bi-envelope-check"></i> Verify Email
+            </button>
+            <div id="emailStatus" class="alert status-badge"></div>
+        </div>
+
+        <!-- Step 2: Setup 2FA -->
+        <div class="step-container auth-step" id="setupStep">
+            <div class="step-number">2</div>
+            <h2 class="mb-4">Setup 2FA</h2>
+            <button onclick="auth.setup2FA()" class="btn btn-primary">
+                <i class="bi bi-shield-lock"></i> Setup 2FA
+            </button>
+            <div id="setupStatus" class="alert status-badge"></div>
+            
+            <div id="qrContainer" class="qr-container" style="display: none;">
+                <h5 class="mb-4">Scan this QR code with Google Authenticator</h5>
+                <div id="qrCode"></div>
+                <div id="secretKey" class="secret-key mt-4" style="display: none;"></div>
+                <div class="text-muted mt-3">
+                    <small>
+                        <i class="bi bi-info-circle"></i>
+                        Don't have Google Authenticator? 
+                        <a href="https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2" target="_blank">Android</a> | 
+                        <a href="https://apps.apple.com/us/app/google-authenticator/id388497605" target="_blank">iOS</a>
+                    </small>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Verify 2FA -->
+        <div class="step-container auth-step" id="verifyStep">
+            <div class="step-number">3</div>
+            <h2 class="mb-4">Verify Setup</h2>
+            <div class="mb-3">
+                <label class="form-label">Enter 6-digit code from Google Authenticator</label>
+                <input type="text" id="token" class="form-control" placeholder="Enter code">
+            </div>
+            <button onclick="auth.verify()" class="btn btn-primary">
+                <i class="bi bi-check-circle"></i> Verify Code
+            </button>
+            <div id="verifyStatus" class="alert status-badge"></div>
+        </div>
+
+        <!-- Success State -->
+        <div class="step-container auth-step" id="successStep">
+            <div class="step-number">4</div>
+            <h2 class="mb-4">Setup Complete</h2>
+            <div class="alert alert-success">
+                <i class="bi bi-check-circle-fill"></i>
+                Two-factor authentication has been successfully set up for your account.
+            </div>
+            <button onclick="auth.reset()" class="btn btn-outline-primary">
+                <i class="bi bi-arrow-repeat"></i> Start Over
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const auth = {
+            API_URL: 'https://hjgkhjk.free.beeceptor.comhttps://your-api-endpoint.com', // Replace with your API endpoint
+            
+            // Store email globally
+            currentEmail: null,
+
+            // Generate random base32 string
+            generateSecret: function() {
+                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+                let secret = '';
+                for(let i = 0; i < 16; i++) {
+                    secret += chars.charAt(Math.floor(Math.random() * chars.length));
+                }
+                return secret;
+            },
+
+            // Convert base32 to hex
+            base32ToHex: function(base32) {
+                const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+                let bits = '';
+                for (let i = 0; i < base32.length; i++) {
+                    let val = base32Chars.indexOf(base32.charAt(i));
+                    bits += val.toString(2).padStart(5, '0');
+                }
+                let hex = '';
+                for (let i = 0; i < bits.length; i += 4) {
+                    hex += parseInt(bits.substr(i, 4), 2).toString(16);
+                }
+                return hex;
+            },
+
+            // Generate TOTP
+            generateTOTP: function(secret) {
+                const time = Math.floor(Date.now() / 30000);
+                const timeHex = time.toString(16).padStart(16, '0');
+                const secretHex = this.base32ToHex(secret);
+                const hmac = CryptoJS.HmacSHA1(
+                    CryptoJS.enc.Hex.parse(timeHex),
+                    CryptoJS.enc.Hex.parse(secretHex)
+                );
+                const hmacHex = hmac.toString(CryptoJS.enc.Hex);
+                const offset = parseInt(hmacHex.slice(-1), 16);
+                const code = parseInt(hmacHex.substr(offset * 2, 8), 16) & 0x7fffffff;
+                return (code % 1000000).toString().padStart(6, '0');
+            },
+
+            // Show status message
+            showStatus: function(elementId, message, isError = false) {
+                const element = document.getElementById(elementId);
+                element.textContent = message;
+                element.style.display = 'block';
+                element.className = 'alert status-badge ' + 
+                    (isError ? 'alert-danger' : 'alert-success');
+                
+                setTimeout(() => {
+                    element.style.display = 'none';
+                }, 3000);
+            },
+
+            // Activate next step
+            activateStep: function(stepId) {
+                document.querySelectorAll('.auth-step').forEach(step => {
+                    step.classList.remove('active');
+                });
+                const nextStep = document.getElementById(stepId);
+                if (nextStep) {
+                    nextStep.classList.add('active');
+                }
+            },
+
+            // Verify email with API
+            verifyEmail: async function() {
+                const email = document.getElementById('userEmail').value;
+                
+                if (!email) {
+                    this.showStatus('emailStatus', 'Please enter your email', true);
+                    return;
+                }
+
+                try {
+                    const response = await fetch(`${this.API_URL}/verify-email`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ email })
+                    });
+
+                    if (response.status === 200) {
+                        this.currentEmail = email;
+                        this.showStatus('emailStatus', 'Email verified successfully');
+                        this.activateStep('setupStep');
+                    } else if (response.status === 404) {
+                        this.showStatus('emailStatus', 'Email not found in system', true);
+                    } else {
+                        throw new Error('Verification failed');
+                    }
+                } catch (error) {
+                    this.showStatus('emailStatus', 'Error verifying email: ' + error.message, true);
+                }
+            },
+
+            // Setup 2FA for verified email
+            setup2FA: function() {
+                if (!this.currentEmail) {
+                    this.showStatus('setupStatus', 'Please verify email first', true);
+                    return;
+                }
+
+                const secret = this.generateSecret();
+                const otpauth_url = `otpauth://totp/2FADemo:${this.currentEmail}?secret=${secret}&issuer=2FADemo`;
+                
+                // Show QR container
+                document.getElementById('qrContainer').style.display = 'block';
+
+                // Generate QR Code
+                const qrCode = document.getElementById('qrCode');
+                qrCode.innerHTML = '';
+                new QRCode(qrCode, {
+                    text: otpauth_url,
+                    width: 200,
+                    height: 200
+                });
+
+                // Display secret key
+                const secretKey = document.getElementById('secretKey');
+                secretKey.textContent = "Manual entry code: " + secret;
+                secretKey.style.display = 'block';
+
+                // Store secret for verification
+                localStorage.setItem('temp_secret', secret);
+                
+                this.showStatus('setupStatus', '2FA setup initiated');
+                this.activateStep('verifyStep');
+            },
+
+            // Verify 2FA setup
+            verify: async function() {
+                const token = document.getElementById('token').value;
+                const secret = localStorage.getItem('temp_secret');
+                
+                if (!token || !secret) {
+                    this.showStatus('verifyStatus', 'Invalid verification attempt', true);
+                    return;
+                }
+
+                const expectedToken = this.generateTOTP(secret);
+                
+                if (token === expectedToken) {
+                    try {
+                        // Send success to API
+                        const response = await fetch(`${this.API_URL}/confirm-2fa`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                email: this.currentEmail,
+                                secret: secret
+                            })
+                        });
+
+                        if (response.ok) {
+                            this.showStatus('verifyStatus', '2FA setup successful');
+                            this.activateStep('successStep');
+                        } else {
+                            throw new Error('Failed to save 2FA settings');
+                        }
+                    } catch (error) {
+                        this.showStatus('verifyStatus', 'Error saving 2FA settings: ' + error.message, true);
+                    }
+                } else {
+                    this.showStatus('verifyStatus', 'Invalid verification code', true);
+                }
+            },
+
+            // Reset the process
+            reset: function() {
+                this.currentEmail = null;
+                localStorage.removeItem('temp_secret');
+                document.getElementById('userEmail').value = '';
+                document.getElementById('token').value = '';
+                document.getElementById('qrContainer').style.display = 'none';
+                document.getElementById('qrCode').innerHTML = '';
+                document.getElementById('secretKey').style.display = 'none';
+                
+                document.querySelectorAll('.auth-step').forEach(step => {
+                    step.classList.remove('active');
+                });
+            }
+        };
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
