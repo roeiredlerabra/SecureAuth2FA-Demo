@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login with 2FA</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        body { 
+            background-color: #f8f9fa;
+            padding-top: 2rem;
+        }
+        .login-container {
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 15px rgba(0,0,0,0.05);
+        }
+        .status-message {
+            display: none;
+            margin-top: 1rem;
+        }
+        #twoFactorForm {
+            display: none;
+        }
+        .loader {
+            display: none;
+            border: 3px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 3px solid #3498db;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="login-container">
+            <h2 class="text-center mb-4">Login</h2>
+
+            <!-- Step 1: Email Login -->
+            <form id="loginForm">
+                <div class="mb-3">
+                    <label class="form-label">Email</label>
+                    <input type="email" id="email" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">
+                    <span id="loginLoader" class="loader"></span>
+                    <span id="loginText"><i class="bi bi-box-arrow-in-right"></i> Continue</span>
+                </button>
+                <div id="loginStatus" class="alert status-message"></div>
+            </form>
+
+            <!-- Step 2: 2FA Verification -->
+            <form id="twoFactorForm">
+                <div class="mb-3">
+                    <label class="form-label">Enter 6-digit code from Google Authenticator</label>
+                    <input type="text" id="token" class="form-control" maxlength="6" pattern="[0-9]*" inputmode="numeric" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">
+                    <span id="verifyLoader" class="loader"></span>
+                    <span id="verifyText"><i class="bi bi-shield-check"></i> Verify</span>
+                </button>
+                <button type="button" onclick="auth.backToEmail()" class="btn btn-link w-100 mt-2">
+                    <i class="bi bi-arrow-left"></i> Back to Email
+                </button>
+                <div id="verifyStatus" class="alert status-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const auth = {
+            API_URL: 'https://hjgkhjk.free.beeceptor.comhttps://your-api-endpoint.com', // Replace with your API endpoint
+            currentSecret: null,
+
+            // Show/hide loading spinner
+            setLoading: function(id, isLoading) {
+                document.getElementById(id + 'Loader').style.display = isLoading ? 'inline-block' : 'none';
+                document.getElementById(id + 'Text').style.display = isLoading ? 'none' : 'inline-block';
+            },
+
+            // Show status message
+            showStatus: function(elementId, message, isError = false) {
+                const element = document.getElementById(elementId);
+                element.textContent = message;
+                element.style.display = 'block';
+                element.className = 'alert status-message ' + 
+                    (isError ? 'alert-danger' : 'alert-success');
+                
+                setTimeout(() => {
+                    element.style.display = 'none';
+                }, 3000);
+            },
+
+            // Show/hide forms
+            showForm: function(formId) {
+                document.getElementById('loginForm').style.display = 'none';
+                document.getElementById('twoFactorForm').style.display = 'none';
+                document.getElementById(formId).style.display = 'block';
+            },
+
+            // Back to email form
+            backToEmail: function() {
+                this.currentSecret = null;
+                this.showForm('loginForm');
+            },
+
+            // Convert base32 to hex
+            base32ToHex: function(base32) {
+                const base32Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+                let bits = '';
+                for (let i = 0; i < base32.length; i++) {
+                    let val = base32Chars.indexOf(base32.charAt(i));
+                    bits += val.toString(2).padStart(5, '0');
+                }
+                let hex = '';
+                for (let i = 0; i < bits.length; i += 4) {
+                    hex += parseInt(bits.substr(i, 4), 2).toString(16);
+                }
+                return hex;
+            },
+
+            // Generate TOTP token
+            generateTOTP: function(secret) {
+                const time = Math.floor(Date.now() / 30000);
+                const timeHex = time.toString(16).padStart(16, '0');
+                const secretHex = this.base32ToHex(secret);
+                const hmac = CryptoJS.HmacSHA1(
+                    CryptoJS.enc.Hex.parse(timeHex),
+                    CryptoJS.enc.Hex.parse(secretHex)
+                );
+                const hmacHex = hmac.toString(CryptoJS.enc.Hex);
+                const offset = parseInt(hmacHex.slice(-1), 16);
+                const code = parseInt(hmacHex.substr(offset * 2, 8), 16) & 0x7fffffff;
+                return (code % 1000000).toString().padStart(6, '0');
+            },
+
+            // Initialize forms
+            init: function() {
+                // Handle email submission
+                document.getElementById('loginForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    await this.verifyEmail();
+                });
+
+                // Handle 2FA code submission
+                document.getElementById('twoFactorForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    await this.verify2FA();
+                });
+
+                // Handle numeric-only input for token
+                document.getElementById('token').addEventListener('input', function(e) {
+                    this.value = this.value.replace(/[^0-9]/g, '');
+                });
+            },
+
+            // Verify email with API
+            verifyEmail: async function() {
+                const email = document.getElementById('email').value;
+                this.setLoading('login', true);
+
+                try {
+                    const response = await fetch(`${this.API_URL}/check-email`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ email })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.status === 200) {
+                        // If secret is included in response, store it
+                        if (data.secret) {
+                            this.currentSecret = data.secret;
+                            this.showForm('twoFactorForm');
+                        } else {
+                            this.showStatus('loginStatus', 'User needs to set up 2FA first', true);
+                        }
+                    } else if (response.status === 404) {
+                        this.showStatus('loginStatus', 'Email not found', true);
+                    } else {
+                        throw new Error('Verification failed');
+                    }
+                } catch (error) {
+                    this.showStatus('loginStatus', 'Error verifying email: ' + error.message, true);
+                } finally {
+                    this.setLoading('login', false);
+                }
+            },
+
+            // Verify 2FA code
+            verify2FA: async function() {
+                const token = document.getElementById('token').value;
+                this.setLoading('verify', true);
+
+                if (!this.currentSecret) {
+                    this.showStatus('verifyStatus', 'Session expired, please try again', true);
+                    this.setLoading('verify', false);
+                    return;
+                }
+
+                // Verify token locally using stored secret
+                const expectedToken = this.generateTOTP(this.currentSecret);
+                
+                if (token === expectedToken) {
+                    this.showStatus('verifyStatus', 'Authentication successful');
+                    // Here you can redirect to your app's dashboard or home page
+                    // window.location.href = '/dashboard.html';
+                } else {
+                    this.showStatus('verifyStatus', 'Invalid verification code', true);
+                }
+                
+                this.setLoading('verify', false);
+            }
+        };
+
+        // Initialize auth handlers
+        auth.init();
+    </script>
+</body>
+</html>-
