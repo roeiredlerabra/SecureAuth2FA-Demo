@@ -179,6 +179,15 @@
                     });
 
                     const data = await response.json();
+// Success response (200)
+// {
+//     "secret": "JBSWY3DPEHPK3PXP"
+// }
+
+// Error response (404)
+// {
+//     "error": "Email not found"
+// }
 
                     if (response.status === 200) {
                         // If secret is included in response, store it
